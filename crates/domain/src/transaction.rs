@@ -15,15 +15,9 @@ pub fn normalize_payload(raw: &str) -> Result<TransactionEvent, anyhow::Error> {
     let json: serde_json::Value = serde_json::from_str(raw)?;
 
     Ok(TransactionEvent {
-        transaction_ref: json["transactionRef"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
+        transaction_ref: json["transactionRef"].as_str().unwrap_or("").to_string(),
         user_id: json["userId"].as_str().unwrap_or("").to_string(),
-        application_id: json["applicationId"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
+        application_id: json["applicationId"].as_str().unwrap_or("").to_string(),
         status: json["status"].as_str().unwrap_or("").to_string(),
         amount: json["amount"].as_f64().unwrap_or(0.0),
         category: json["category"].as_str().unwrap_or("").to_string(),
@@ -64,4 +58,3 @@ mod tests {
         );
     }
 }
-

@@ -14,5 +14,7 @@ else
   cargo test --workspace
 fi
 
-echo "[pre-commit] All checks passed."
+echo "[pre-commit] Staging formatted files..."
+git add -u
 
+echo "[pre-commit] All checks passed."

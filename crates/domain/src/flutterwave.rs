@@ -73,7 +73,8 @@ mod tests {
         }
         "#;
 
-        let event = normalize_flutterwave_payload(raw).expect("normalize_flutterwave_payload should succeed");
+        let event = normalize_flutterwave_payload(raw)
+            .expect("normalize_flutterwave_payload should succeed");
 
         assert_eq!(event.transaction_ref, "flw-123");
         assert_eq!(event.user_id, "cust-1");
@@ -83,4 +84,3 @@ mod tests {
         assert_eq!(event.category, "card");
     }
 }
-
