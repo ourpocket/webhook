@@ -1,6 +1,10 @@
-[package]
-name = "webhook"
-version = "0.1.0"
-edition = "2024"
 
-[dependencies]
+[workspace]
+members = [
+    "crates/domain",
+    "crates/webhook-server",
+    "crates/queue",
+    "crates/rpc-client",
+    "crates/worker",
+]
+resolver = "2"
