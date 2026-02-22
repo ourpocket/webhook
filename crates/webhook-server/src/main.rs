@@ -4,8 +4,8 @@ use axum::{
     http::StatusCode,
     routing::{get, post},
 };
-use domain::normalize_payload;
-use queue::{EventQueue, InMemoryQueue};
+use domain::normalize_webhook_payload;
+use queue::{EventQueue, RedisQueue};
 
 #[derive(Clone)]
 struct AppState<Q: EventQueue + Clone + 'static> {
@@ -14,12 +14,17 @@ struct AppState<Q: EventQueue + Clone + 'static> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let queue = InMemoryQueue::new(1024);
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let queue_key =
+        std::env::var("REDIS_QUEUE_KEY").unwrap_or_else(|_| "ourpocket:transactions".to_string());
+
+    let queue = RedisQueue::new(&redis_url, queue_key)?;
     let state = AppState { queue };
 
     let app = Router::new()
         .route("/health", get(health_handler))
-        .route("/webhook", post(webhook_handler::<InMemoryQueue>))
+        .route("/webhook", post(webhook_handler::<RedisQueue>))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
@@ -40,7 +45,7 @@ async fn webhook_handler<Q>(
 where
     Q: EventQueue + Clone + 'static,
 {
-    let event = normalize_payload(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let event = normalize_webhook_payload(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     state
         .queue
@@ -59,7 +64,7 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn webhook_handler_returns_ok_for_valid_payload() {
+    async fn webhook_handler_returns_ok_for_flutterwave_payload() {
         let queue = InMemoryQueue::new(16);
         let state = AppState { queue };
 
@@ -69,12 +74,19 @@ mod tests {
 
         let body = r#"
         {
-            "transactionRef": "abc123",
-            "userId": "user1",
-            "applicationId": "app1",
-            "status": "SUCCESS",
-            "amount": 100.5,
-            "category": "PAYMENT"
+            "provider": "flutterwave",
+            "data": {
+                "tx_ref": "abc123",
+                "status": "SUCCESS",
+                "amount": 100.5,
+                "payment_type": "PAYMENT",
+                "customer": {
+                    "id": "user1"
+                },
+                "meta": {
+                    "application_id": "app1"
+                }
+            }
         }
         "#;
 

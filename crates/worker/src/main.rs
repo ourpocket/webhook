@@ -1,15 +1,18 @@
 use anyhow::Result;
 use dotenvy::dotenv;
-use queue::{EventQueueConsumer, InMemoryQueue};
+use queue::{EventQueueConsumer, RedisQueue};
 use rpc_client::{AppConfig, BackendClient, HttpBackendClient};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
 
-    // In a real deployment, this would connect to an external queue like SQS/Kafka/NATS.
-    // For now, this uses an in-memory queue instance as a placeholder.
-    let queue = InMemoryQueue::new(1024);
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let queue_key =
+        std::env::var("REDIS_QUEUE_KEY").unwrap_or_else(|_| "ourpocket:transactions".to_string());
+
+    let queue = RedisQueue::new(&redis_url, queue_key)?;
 
     let config = AppConfig::from_env();
     let backend_client = HttpBackendClient::new(config);

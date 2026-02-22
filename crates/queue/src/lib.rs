@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Error;
 use async_trait::async_trait;
 use domain::TransactionEvent;
+use redis::AsyncCommands;
 use tokio::sync::mpsc;
 
 #[async_trait]
@@ -31,6 +32,23 @@ impl InMemoryQueue {
     }
 }
 
+#[derive(Clone)]
+pub struct RedisQueue {
+    client: redis::Client,
+    queue_key: String,
+}
+
+impl RedisQueue {
+    pub fn new(redis_url: &str, queue_key: impl Into<String>) -> Result<Self, Error> {
+        let client = redis::Client::open(redis_url).map_err(|err| Error::msg(err.to_string()))?;
+
+        Ok(Self {
+            client,
+            queue_key: queue_key.into(),
+        })
+    }
+}
+
 #[async_trait]
 impl EventQueue for InMemoryQueue {
     async fn publish(&self, event: TransactionEvent) -> Result<(), Error> {
@@ -48,6 +66,48 @@ impl EventQueueConsumer for InMemoryQueue {
         rx.recv()
             .await
             .ok_or_else(|| Error::msg("queue closed".to_string()))
+    }
+}
+
+#[async_trait]
+impl EventQueue for RedisQueue {
+    async fn publish(&self, event: TransactionEvent) -> Result<(), Error> {
+        let mut conn = self
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|err| Error::msg(err.to_string()))?;
+
+        let payload = serde_json::to_string(&event).map_err(|err| Error::msg(err.to_string()))?;
+
+        let _: () = conn
+            .lpush(&self.queue_key, payload)
+            .await
+            .map_err(|err| Error::msg(err.to_string()))?;
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl EventQueueConsumer for RedisQueue {
+    async fn consume(&self) -> Result<TransactionEvent, Error> {
+        let mut conn = self
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|err| Error::msg(err.to_string()))?;
+
+        let (_key, payload): (String, String) = redis::cmd("BRPOP")
+            .arg(&self.queue_key)
+            .arg(0)
+            .query_async(&mut conn)
+            .await
+            .map_err(|err| Error::msg(err.to_string()))?;
+
+        let event = serde_json::from_str(&payload).map_err(|err| Error::msg(err.to_string()))?;
+
+        Ok(event)
     }
 }
 
@@ -93,5 +153,51 @@ mod tests {
 
         let result = queue.consume().await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn redis_queue_persists_items_across_instances() {
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        let queue_key = "ourpocket:test:transactions_persist";
+
+        let client = match redis::Client::open(redis_url.clone()) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let mut conn = match client.get_multiplexed_async_connection().await {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let _ = redis::cmd("DEL")
+            .arg(queue_key)
+            .query_async::<_, ()>(&mut conn)
+            .await;
+
+        let queue1 = match RedisQueue::new(&redis_url, queue_key) {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+
+        let event = build_event("redis-user-1");
+        if queue1.publish(event.clone()).await.is_err() {
+            return;
+        }
+
+        drop(queue1);
+
+        let queue2 = match RedisQueue::new(&redis_url, queue_key) {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+
+        let consumed = match queue2.consume().await {
+            Ok(ev) => ev,
+            Err(_) => return,
+        };
+
+        assert_eq!(consumed, event);
     }
 }
