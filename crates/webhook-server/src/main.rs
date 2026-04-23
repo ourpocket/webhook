@@ -1,11 +1,12 @@
 use axum::{
     Router,
-    extract::State,
-    http::StatusCode,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
 use domain::normalize_webhook_payload;
 use queue::{EventQueue, RedisQueue};
+use std::env;
 
 #[derive(Clone)]
 struct AppState<Q: EventQueue + Clone + 'static> {
@@ -14,17 +15,16 @@ struct AppState<Q: EventQueue + Clone + 'static> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let queue_key =
-        std::env::var("REDIS_QUEUE_KEY").unwrap_or_else(|_| "ourpocket:transactions".to_string());
+        env::var("REDIS_QUEUE_KEY").unwrap_or_else(|_| "ourpocket:transactions".to_string());
 
     let queue = RedisQueue::new(&redis_url, queue_key)?;
     let state = AppState { queue };
 
     let app = Router::new()
         .route("/health", get(health_handler))
-        .route("/webhook", post(webhook_handler::<RedisQueue>))
+        .route("/webhook/:provider", post(webhook_handler::<RedisQueue>))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
@@ -39,13 +39,31 @@ async fn health_handler() -> StatusCode {
 }
 
 async fn webhook_handler<Q>(
+    Path(provider): Path<String>,
     State(state): State<AppState<Q>>,
+    headers: HeaderMap,
     body: String,
 ) -> Result<StatusCode, StatusCode>
 where
     Q: EventQueue + Clone + 'static,
 {
+    // Verify webhook signature based on provider
+    let signature = headers
+        .get("x-signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !verify_signature(&provider, &body, signature) {
+        eprintln!("Invalid webhook signature for provider: {}", provider);
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     let event = normalize_webhook_payload(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    println!(
+        "Received webhook from {} for ref: {}",
+        provider, event.transaction_ref
+    );
 
     state
         .queue
@@ -54,6 +72,46 @@ where
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::OK)
+}
+
+fn verify_signature(provider: &str, body: &str, signature: &str) -> bool {
+    match provider {
+        "flutterwave" => {
+            let secret = env::var("FLUTTERWAVE_WEBHOOK_SECRET").unwrap_or_default();
+            verify_hmac(body, signature, &secret)
+        }
+        "paystack" => {
+            let secret = env::var("PAYSTACK_WEBHOOK_SECRET").unwrap_or_default();
+            verify_hmac(body, signature, &secret)
+        }
+        _ => {
+            // In dev/testing, allow unknown providers
+            env::var("APP_ENV").unwrap_or_else(|_| "production".to_string()) != "production"
+        }
+    }
+}
+
+fn verify_hmac(body: &str, signature: &str, secret: &str) -> bool {
+    if secret.is_empty() {
+        // Skip verification if no secret configured (dev mode)
+        return true;
+    }
+
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    type HmacSha256 = Hmac<Sha256>;
+
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    mac.update(body.as_bytes());
+
+    let result = mac.finalize();
+    let expected = hex::encode(result.into_bytes());
+
+    // Timing-safe comparison
+    use subtle::ConstantTimeEq;
+    expected.as_bytes().ct_eq(signature.as_bytes()).into()
 }
 
 #[cfg(test)]
@@ -69,7 +127,7 @@ mod tests {
         let state = AppState { queue };
 
         let app = Router::new()
-            .route("/webhook", post(webhook_handler::<InMemoryQueue>))
+            .route("/webhook/:provider", post(webhook_handler::<InMemoryQueue>))
             .with_state(state);
 
         let body = r#"
@@ -92,7 +150,7 @@ mod tests {
 
         let request = Request::builder()
             .method("POST")
-            .uri("/webhook")
+            .uri("/webhook/flutterwave")
             .header("content-type", "application/json")
             .body(Body::from(body))
             .unwrap();

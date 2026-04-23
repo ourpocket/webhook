@@ -9,6 +9,8 @@ services:
       - "3000:3000"
     env_file:
       - .env
+    depends_on:
+      - redis
 
   worker:
     build:

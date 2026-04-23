@@ -68,7 +68,7 @@ struct TransactionRequestDto {
 #[async_trait::async_trait]
 impl BackendClient for HttpBackendClient {
     async fn send_transaction(&self, event: TransactionEvent) -> Result<()> {
-        let url = format!("{}/transactions/webhook", self.config.backend_url());
+        let url = format!("{}/webhooks/payment", self.config.backend_url());
 
         let payload = TransactionRequestDto {
             transaction_ref: event.transaction_ref,

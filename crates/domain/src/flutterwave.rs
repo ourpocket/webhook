@@ -14,11 +14,13 @@ pub fn normalize_flutterwave_payload(raw: &str) -> Result<TransactionEvent, Erro
         .unwrap_or("")
         .to_string();
 
+    // Flutterwave customer.id is numeric, handle both int and string
     let user_id = data["customer"]["id"]
-        .as_str()
-        .or_else(|| data["customer"]["email"].as_str())
-        .unwrap_or("")
-        .to_string();
+        .as_u64()
+        .map(|id| id.to_string())
+        .or_else(|| data["customer"]["id"].as_str().map(String::from))
+        .or_else(|| data["customer"]["email"].as_str().map(String::from))
+        .unwrap_or_default();
 
     let application_id = data["app_id"]
         .as_str()
