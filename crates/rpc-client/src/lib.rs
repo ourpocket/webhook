@@ -71,7 +71,7 @@ impl BackendClient for HttpBackendClient {
         let url = format!("{}/webhooks/payment", self.config.backend_url());
 
         let payload = TransactionRequestDto {
-            transaction_ref: event.transaction_ref,
+            transaction_ref: event.transaction_ref.clone(),
             user_id: event.user_id,
             application_id: event.application_id,
             status: event.status,
@@ -80,7 +80,24 @@ impl BackendClient for HttpBackendClient {
             metadata: event.metadata,
         };
 
-        self.http_client.post(url).json(&payload).send().await?;
+        let response = self
+            .http_client
+            .post(url)
+            .header("Idempotency-Key", event.transaction_ref)
+            .json(&payload)
+            .send()
+            .await?;
+
+        // Check HTTP status - only 2xx is success
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Backend returned {}: {}",
+                status,
+                body
+            ));
+        }
 
         Ok(())
     }

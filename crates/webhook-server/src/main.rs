@@ -72,7 +72,7 @@ where
 }
 
 fn extract_signature<'a>(provider: &str, headers: &'a HeaderMap) -> &'a str {
-    match provider {
+    match provider.to_ascii_lowercase().as_str() {
         "paystack" => headers
             .get("x-paystack-signature")
             .and_then(|v| v.to_str().ok())
@@ -89,14 +89,24 @@ fn extract_signature<'a>(provider: &str, headers: &'a HeaderMap) -> &'a str {
 }
 
 fn verify_signature(provider: &str, body: &str, signature: &str) -> bool {
-    match provider {
+    match provider.to_ascii_lowercase().as_str() {
         "flutterwave" => {
             let secret = env::var("FLUTTERWAVE_WEBHOOK_SECRET").unwrap_or_default();
-            verify_hmac(body, signature, &secret)
+            if secret.is_empty() {
+                eprintln!("WARNING: FLUTTERWAVE_WEBHOOK_SECRET not set, rejecting webhook");
+                return false;
+            }
+            // Flutterwave v3: verif-hash is the plain secret, compare directly
+            signature == secret
         }
         "paystack" => {
             let secret = env::var("PAYSTACK_WEBHOOK_SECRET").unwrap_or_default();
-            verify_hmac(body, signature, &secret)
+            if secret.is_empty() {
+                eprintln!("WARNING: PAYSTACK_WEBHOOK_SECRET not set, rejecting webhook");
+                return false;
+            }
+            // Paystack uses HMAC-SHA512 with hex encoding
+            verify_hmac_sha512(body, signature, &secret)
         }
         _ => {
             // In dev/testing, allow unknown providers
@@ -105,19 +115,14 @@ fn verify_signature(provider: &str, body: &str, signature: &str) -> bool {
     }
 }
 
-fn verify_hmac(body: &str, signature: &str, secret: &str) -> bool {
-    if secret.is_empty() {
-        // Skip verification if no secret configured (dev mode)
-        return true;
-    }
-
+fn verify_hmac_sha512(body: &str, signature: &str, secret: &str) -> bool {
     use hmac::{Hmac, Mac};
-    use sha2::Sha256;
+    use sha2::Sha512;
 
-    type HmacSha256 = Hmac<Sha256>;
+    type HmacSha512 = Hmac<Sha512>;
 
     let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+        HmacSha512::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(body.as_bytes());
 
     let result = mac.finalize();
@@ -137,6 +142,12 @@ mod tests {
 
     #[tokio::test]
     async fn webhook_handler_returns_ok_for_flutterwave_payload() {
+        // Set test secret
+        unsafe {
+            std::env::set_var("FLUTTERWAVE_WEBHOOK_SECRET", "test-secret");
+            std::env::set_var("APP_ENV", "testing");
+        }
+
         let queue = InMemoryQueue::new(16);
         let state = AppState { queue };
 
@@ -166,6 +177,7 @@ mod tests {
             .method("POST")
             .uri("/webhook/flutterwave")
             .header("content-type", "application/json")
+            .header("verif-hash", "test-secret")
             .body(Body::from(body))
             .unwrap();
 

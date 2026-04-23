@@ -54,10 +54,26 @@ impl RedisQueue {
         })
     }
 
-    fn get_blocking_connection(&self) -> Result<redis::Connection, Error> {
-        self.client
-            .get_connection()
-            .map_err(|err| Error::msg(err.to_string()))
+    async fn brpop_async(&self) -> Result<(String, String), Error> {
+        // Use spawn_blocking to avoid blocking the async runtime
+        let queue_key = self.queue_key.clone();
+        let client = self.client.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let mut conn = client
+                .get_connection()
+                .map_err(|err| Error::msg(err.to_string()))?;
+
+            let result: Option<(String, String)> = redis::cmd("BRPOP")
+                .arg(&queue_key)
+                .arg(5)
+                .query(&mut conn)
+                .map_err(|err| Error::msg(err.to_string()))?;
+
+            result.ok_or_else(|| Error::msg("BRPOP timeout"))
+        })
+        .await
+        .map_err(|err| Error::msg(err.to_string()))?
     }
 }
 
@@ -99,15 +115,8 @@ impl EventQueue for RedisQueue {
 #[async_trait]
 impl EventQueueConsumer for RedisQueue {
     async fn consume(&self) -> Result<TransactionEvent, Error> {
-        // Use synchronous connection for blocking BRPOP
-        let mut conn = self.get_blocking_connection()?;
-
-        // Use 5-second timeout to allow graceful shutdown
-        let (_key, payload): (String, String) = redis::cmd("BRPOP")
-            .arg(&self.queue_key)
-            .arg(5)
-            .query(&mut conn)
-            .map_err(|err| Error::msg(err.to_string()))?;
+        // Use spawn_blocking to avoid blocking the async runtime
+        let (_key, payload) = self.brpop_async().await?;
 
         let event = serde_json::from_str(&payload).map_err(|err| Error::msg(err.to_string()))?;
 
