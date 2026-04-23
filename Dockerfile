@@ -1,19 +1,28 @@
-FROM rust:1.82-slim AS builder
+FROM rust:slim-trixie AS builder
 
-WORKDIR /usr/src/app
+WORKDIR /app
 
+# Build argument for binary name
+ARG BIN_NAME=webhook-server
+
+# Copy manifests and code
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY crates ./crates
 
-RUN cargo build --release
 
-FROM debian:bookworm-slim
+RUN cargo build --release -p ${BIN_NAME}
 
-WORKDIR /usr/src/app
+FROM debian:trixie-slim
 
-COPY --from=builder /usr/src/app/target/release/webhook /usr/local/bin/webhook
+RUN useradd -m appuser
 
-ENV PORT=5000
-EXPOSE 5000
 
-CMD ["webhook"]
+COPY --from=builder /app/target/release/${BIN_NAME} /usr/local/bin/app
+
+RUN chmod +x /usr/local/bin/app && chown appuser:appuser /usr/local/bin/app
+
+USER appuser
+ENV RUST_LOG=info
+
+
+ENTRYPOINT ["/usr/local/bin/app"]

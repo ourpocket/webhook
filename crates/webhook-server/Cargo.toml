@@ -1,0 +1,20 @@
+[package]
+name = "webhook-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+domain = { path = "../domain" }
+queue = { path = "../queue" }
+tower = "0.5"
+# Added for webhook verification
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2.6"
+tracing = "0.1"
+http = "1.1"
