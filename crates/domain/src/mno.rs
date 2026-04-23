@@ -64,6 +64,7 @@ pub fn normalize_airtel_money_payload(raw: &str) -> Result<TransactionEvent, Err
     let amount = json["transaction"]["amount"]
         .as_str()
         .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| json["transaction"]["amount"].as_f64())
         .unwrap_or(0.0);
 
     Ok(TransactionEvent {
@@ -100,6 +101,7 @@ pub fn normalize_orange_money_payload(raw: &str) -> Result<TransactionEvent, Err
     let amount = json["amount"]
         .as_str()
         .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| json["amount"].as_f64())
         .unwrap_or(0.0);
 
     Ok(TransactionEvent {

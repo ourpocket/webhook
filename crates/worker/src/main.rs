@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
     let queue_key =
         std::env::var("REDIS_QUEUE_KEY").unwrap_or_else(|_| "ourpocket:transactions".to_string());
 
-    let queue = RedisQueue::new(&redis_url, queue_key)?;
+    let queue = RedisQueue::new(&redis_url, queue_key).await?;
 
     let config = AppConfig::from_env();
     let backend_client = HttpBackendClient::new(config);
@@ -45,12 +45,19 @@ where
                         Err(e) => {
                             let err_msg = e.to_string();
                             last_error = Some(err_msg.clone());
-                            let delay = calculate_backoff(attempt, base_delay, max_delay);
-                            eprintln!(
-                                "Attempt {}/{} failed for {}: {}. Retrying in {:?}",
-                                attempt, max_retries, event.transaction_ref, err_msg, delay
-                            );
-                            tokio::time::sleep(delay).await;
+                            if attempt < max_retries {
+                                let delay = calculate_backoff(attempt, base_delay, max_delay);
+                                eprintln!(
+                                    "Attempt {}/{} failed for {}: {}. Retrying in {:?}",
+                                    attempt, max_retries, event.transaction_ref, err_msg, delay
+                                );
+                                tokio::time::sleep(delay).await;
+                            } else {
+                                eprintln!(
+                                    "Attempt {}/{} failed for {}: {}.",
+                                    attempt, max_retries, event.transaction_ref, err_msg
+                                );
+                            }
                         }
                     }
                 }

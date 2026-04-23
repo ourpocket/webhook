@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     let queue_key =
         env::var("REDIS_QUEUE_KEY").unwrap_or_else(|_| "ourpocket:transactions".to_string());
 
-    let queue = RedisQueue::new(&redis_url, queue_key)?;
+    let queue = RedisQueue::new(&redis_url, queue_key).await?;
     let state = AppState { queue };
 
     let app = Router::new()
@@ -48,17 +48,14 @@ where
     Q: EventQueue + Clone + 'static,
 {
     // Verify webhook signature based on provider
-    let signature = headers
-        .get("x-signature")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let signature = extract_signature(&provider, &headers);
 
     if !verify_signature(&provider, &body, signature) {
         eprintln!("Invalid webhook signature for provider: {}", provider);
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let event = normalize_webhook_payload(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let event = normalize_webhook_payload(&body, &provider).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     println!(
         "Received webhook from {} for ref: {}",
@@ -72,6 +69,23 @@ where
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::OK)
+}
+
+fn extract_signature<'a>(provider: &str, headers: &'a HeaderMap) -> &'a str {
+    match provider {
+        "paystack" => headers
+            .get("x-paystack-signature")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+        "flutterwave" => headers
+            .get("verif-hash")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+        _ => headers
+            .get("x-signature")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+    }
 }
 
 fn verify_signature(provider: &str, body: &str, signature: &str) -> bool {

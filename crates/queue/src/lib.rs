@@ -36,22 +36,22 @@ impl InMemoryQueue {
 pub struct RedisQueue {
     client: redis::Client,
     queue_key: String,
+    connection: redis::aio::MultiplexedConnection,
 }
 
 impl RedisQueue {
-    pub fn new(redis_url: &str, queue_key: impl Into<String>) -> Result<Self, Error> {
+    pub async fn new(redis_url: &str, queue_key: impl Into<String>) -> Result<Self, Error> {
         let client = redis::Client::open(redis_url).map_err(|err| Error::msg(err.to_string()))?;
+        let connection = client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|err| Error::msg(err.to_string()))?;
 
         Ok(Self {
             client,
             queue_key: queue_key.into(),
+            connection,
         })
-    }
-
-    fn get_connection(&self) -> Result<redis::aio::MultiplexedConnection, Error> {
-        tokio::runtime::Handle::current()
-            .block_on(self.client.get_multiplexed_async_connection())
-            .map_err(|err| Error::msg(err.to_string()))
     }
 
     fn get_blocking_connection(&self) -> Result<redis::Connection, Error> {
@@ -84,10 +84,7 @@ impl EventQueueConsumer for InMemoryQueue {
 #[async_trait]
 impl EventQueue for RedisQueue {
     async fn publish(&self, event: TransactionEvent) -> Result<(), Error> {
-        let mut conn = tokio::runtime::Handle::current()
-            .block_on(self.client.get_multiplexed_async_connection())
-            .map_err(|err| Error::msg(err.to_string()))?;
-
+        let mut conn = self.connection.clone();
         let payload = serde_json::to_string(&event).map_err(|err| Error::msg(err.to_string()))?;
 
         let _: () = conn
